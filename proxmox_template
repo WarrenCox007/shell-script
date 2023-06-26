@@ -1,0 +1,111 @@
+#!/bin/bash
+
+# Enable debug mode
+#set -x
+
+# Prompt for VM ID
+read -p "Enter the VM ID: " VM_ID
+
+# Select OS version
+echo "Select the OS version:"
+echo "1. Ubuntu 18.04"
+echo "2. Ubuntu 20.04"
+echo "3. Ubuntu 22.04"
+echo "4. Ubuntu 23.04"
+echo "5. Debian 10"
+echo "6. Debian 11"
+echo "7. Debian 12"
+echo "8. AlmaLinux 8"
+echo "9. AlmaLinux 9"
+read -p "Enter your choice: " OS_CHOICE
+
+case $OS_CHOICE in
+    1)
+        OS_NAME="Template.Ubuntu.18.04"
+        OS_IMAGE_URL="https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"
+        ;;
+    2)
+        OS_NAME="Template.Ubuntu.20.04"
+        OS_IMAGE_URL="https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"
+        ;;
+    3)
+        OS_NAME="Template.Ubuntu.22.04"
+        OS_IMAGE_URL="https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+        ;;
+    4)
+        OS_NAME="Template.Ubuntu.23.04"
+        OS_IMAGE_URL="https://cloud-images.ubuntu.com/lunar/current/lunar-server-cloudimg-amd64.img"
+        ;;
+    5)
+        OS_NAME="Template.Debian.10"
+        OS_IMAGE_URL="https://cloud.debian.org/images/cloud/buster/latest/debian-10-generic-amd64.qcow2"
+        ;;
+    6)
+        OS_NAME="Template.Debian.11"
+        OS_IMAGE_URL="https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"
+        ;;
+    7)
+        OS_NAME="Template.Debian.12"
+        OS_IMAGE_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+        ;;
+    8)
+        OS_NAME="Template.AlmaLinux-8"
+        OS_IMAGE_URL="https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2"
+        ;;
+    9)
+        OS_NAME="Template.AlmaLinux-9"
+        OS_IMAGE_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"
+        ;;
+    *)
+        echo "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac
+
+# Define other desired parameters
+MEMORY=2048
+NETWORK_ADAPTER="virtio"
+BRIDGE_NAME="vmbr0"
+SCSI_CONTROLLER="virtio-scsi-pci"
+CPU_CORES=2
+
+# Create the new virtual machine
+VM_NAME="${OS_NAME}"
+qm create $VM_ID --name "$VM_NAME" --memory $MEMORY --cores $CPU_CORES --net0 $NETWORK_ADAPTER,bridge=$BRIDGE_NAME --scsihw $SCSI_CONTROLLER
+
+# Add serial port
+qm set $VM_ID --serial0 socket
+
+# Create directory
+mkdir -p /templates-temp/
+
+# Download OS template
+IMAGE_FILE="/templates-temp/${OS_NAME,,}-latest.qcow2"
+wget -O $IMAGE_FILE $OS_IMAGE_URL
+
+# Convert qcow2 to raw format
+RAW_IMAGE_FILE="/templates-temp/${OS_NAME,,}-latest.raw"
+qemu-img convert -f qcow2 -O raw $IMAGE_FILE $RAW_IMAGE_FILE
+
+# Remove the qcow2 file
+rm $IMAGE_FILE
+
+# Prompt for storage selection
+echo "Available storage:"
+pvesm status -content images | awk '{print $1}'
+read -p "Enter the storage name: " STORAGE_NAME
+
+# Import the converted file
+qm importdisk $VM_ID $RAW_IMAGE_FILE $STORAGE_NAME
+
+# Set the imported disk as the primary disk
+qm set $VM_ID --virtio0 /mnt/pve/$STORAGE_NAME/images/$VM_ID/vm-$VM_ID-disk-0.raw
+
+# Add cloud-init drive using SATA bus
+qm set $VM_ID --sata1 $STORAGE_NAME:cloudinit
+
+# Set the OS type to Linux
+qm set $VM_ID --ostype l26
+
+# Set the boot order to scsi0
+qm set $VM_ID --boot c --bootdisk virtio0
